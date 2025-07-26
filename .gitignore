@@ -1,0 +1,13 @@
+# Ambiente Virtual do Python
+.venv/
+venv/
+
+# Pasta de instância do Flask (com o banco de dados de teste local)
+instance/
+
+# Arquivos de cache do Python
+__pycache__/
+*.pyc
+
+# Arquivo de cache das músicas (para acelerar o deploy)
+song_library.json
