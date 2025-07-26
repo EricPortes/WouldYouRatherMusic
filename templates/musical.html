@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="{{ texts.lang_code or 'pt-br' }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Qual é a Melhor?</title>
+    <link rel="icon" type="image/png" href="/static/favicon.png">
+
+    <style>
+        /* ESTILOS PRINCIPAIS PARA DESKTOP */
+        body, html { margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #121212; }
+        .game-container { display: flex; flex-direction: row; width: 100%; height: 100%; position: relative; }
+        .divider { width: 10px; height: 100%; background-color: black; position: absolute; top: 0; left: 50%; transform: translateX(-50%); z-index: 2; }
+        .vs-circle { width: 100px; height: 100px; background-color: black; border-radius: 50%; color: white; font-size: 48px; font-weight: bold; display: flex; justify-content: center; align-items: center; position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 3; border: 5px solid white; }
+        .side { width: 50%; height: 100%; display: flex; justify-content: center; align-items: center; cursor: pointer; position: relative; transition: filter 0.3s ease-in-out; }
+        .side.left { background-color: #007BFF; }
+        .side.right { background-color: #E60023; }
+        .side::after { content: ''; position: absolute; top: 0; left: 0; width: 100%; height: 100%; background-color: rgba(0, 0, 0, 0.3); opacity: 0; transition: opacity 0.3s ease-in-out; z-index: 0; }
+        .side:hover::after { opacity: 1; }
+        .song-content { text-align: center; color: white; position: relative; z-index: 1; opacity: 0; transform: scale(0.8); transition: opacity 0.4s ease-out, transform 0.4s ease-out; }
+        .song-content.visible { opacity: 1; transform: scale(1); }
+        .side.winner .song-content { transform: scale(1.05); filter: drop-shadow(0 0 15px rgba(255, 255, 255, 0.5)); }
+        .side.loser .song-content { opacity: 0.6; transform: scale(0.95); }
+        .album-cover { width: 300px; height: 300px; object-fit: cover; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); margin-bottom: 20px; background-color: #333; }
+        .song-title { font-size: 28px; font-weight: bold; }
+        .song-artist { font-size: 18px; }
+        .approval-rating { font-size: 22px; font-weight: bold; margin-top: 15px; color: white; opacity: 0; transition: opacity 0.5s ease-in; }
+        #start-button, #next-round-button { position: absolute; bottom: 30px; left: 50%; transform: translateX(-50%); padding: 15px 30px; font-size: 20px; font-weight: bold; color: white; background-color: #1DB954; border: none; border-radius: 30px; cursor: pointer; z-index: 5; }
+        #next-round-button { display: none; }
+
+        /* LAYOUT PARA TELAS VERTICAIS (CELULAR) */
+        @media (max-width: 768px) and (orientation: portrait) {
+            .game-container { flex-direction: column; }
+            .side { width: 100%; height: 50%; }
+            /* --- DIVISÓRIA MELHORADA --- */
+            .divider {
+                width: 100%;
+                height: 8px; /* Um pouco mais grossa */
+                background-color: black;
+                border-top: 1px solid #333; /* Adiciona um efeito de borda sutil */
+                border-bottom: 1px solid #333;
+                top: 50%;
+                left: 0;
+                transform: translateY(-50%);
+            }
+            .vs-circle { width: 60px; height: 60px; font-size: 28px; border-width: 3px; }
+            .album-cover { width: 120px; height: 120px; margin-bottom: 10px; }
+            .song-title { font-size: 18px; }
+            .song-artist { font-size: 14px; }
+            .approval-rating { font-size: 16px; margin-top: 8px; }
+            #start-button, #next-round-button { font-size: 16px; padding: 10px 20px; bottom: 20px; }
+        }
+    </style>
+</head>
+<body>
+    <div class="game-container">
+        <div class="side left" id="side-left"><div class="song-content" id="song-left"><img class="album-cover" id="cover-left" alt=""><h2 class="song-title" id="title-left"></h2><p class="song-artist" id="artist-left"></p><div class="approval-rating" id="approval-left"></div></div></div>
+        <div class="vs-circle">{{ texts.vs }}</div>
+        <div class="side right" id="side-right"><div class="song-content" id="song-right"><img class="album-cover" id="cover-right" alt=""><h2 class="song-title" id="title-right"></h2><p class="song-artist" id="artist-right"></p><div class="approval-rating" id="approval-right"></div></div></div>
+    </div>
+    <button id="start-button">▶ {{ texts.start_game }}</button>
+    <button id="next-round-button">{{ texts.next_round }}</button>
+    <audio id="audio-player"></audio>
+    <script>
+    const TEXTS = {
+        approval_of: "{{ texts.approval_of }}",
+        approval_error: "{{ texts.approval_error }}",
+        error_loading_songs: "Não foi possível carregar as músicas. Verifique a conexão do servidor."
+    };
+    const sideLeft = document.getElementById("side-left"),
+        sideRight = document.getElementById("side-right"),
+        songLeft = document.getElementById("song-left"),
+        songRight = document.getElementById("song-right"),
+        startButton = document.getElementById("start-button"),
+        nextRoundButton = document.getElementById("next-round-button"),
+        audioPlayer = document.getElementById("audio-player"),
+        approvalLeft = document.getElementById("approval-left"),
+        approvalRight = document.getElementById("approval-right");
+    let currentSongs = {},
+        roundOver = false,
+        isChoiceEnabled = false,
+        fadeInterval, stopAudioTimeoutId;
+
+    function playAudio(song, durationInSeconds) {
+        if (!song || !song.preview) return console.error("Música ou preview não encontrado!");
+        clearInterval(fadeInterval);
+        clearTimeout(stopAudioTimeoutId);
+        audioPlayer.src = song.preview;
+        audioPlayer.volume = 0;
+        audioPlayer.play().catch(e => console.error("Erro ao tocar áudio:", e));
+        if ('mediaSession' in navigator) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: song.title,
+                artist: song.artist,
+                album: 'Qual é a Melhor?',
+                artwork: [{
+                    src: song.cover,
+                    sizes: '300x300',
+                    type: 'image/jpeg'
+                }]
+            });
+            navigator.mediaSession.setActionHandler('play', null);
+            navigator.mediaSession.setActionHandler('pause', null);
+            navigator.mediaSession.setActionHandler('previoustrack', null);
+            navigator.mediaSession.setActionHandler('nexttrack', null);
+        }
+        let currentVolume = 0;
+        fadeInterval = setInterval(() => {
+            currentVolume += 0.1;
+            if (currentVolume >= 1) {
+                currentVolume = 1;
+                clearInterval(fadeInterval);
+            }
+            audioPlayer.volume = currentVolume;
+        }, 100);
+        stopAudioTimeoutId = setTimeout(() => {
+            clearInterval(fadeInterval);
+            currentVolume = 1;
+            fadeInterval = setInterval(() => {
+                currentVolume -= 0.1;
+                if (currentVolume <= 0) {
+                    currentVolume = 0;
+                    clearInterval(fadeInterval);
+                    audioPlayer.pause();
+                }
+                audioPlayer.volume = currentVolume;
+            }, 100);
+        }, (durationInSeconds - 1) * 1000);
+    }
+    async function startRound() {
+        roundOver = false;
+        isChoiceEnabled = false;
+        nextRoundButton.style.display = "none";
+        songLeft.classList.remove("visible");
+        songRight.classList.remove("visible");
+        sideLeft.classList.remove("winner", "loser");
+        sideRight.classList.remove("winner", "loser");
+        approvalLeft.style.opacity = 0;
+        approvalRight.style.opacity = 0;
+        try {
+            const response = await fetch("/get-songs");
+            const data = await response.json();
+            if (data.error) {
+                return alert(TEXTS.error_loading_songs);
+            }
+            currentSongs.left = data[0];
+            currentSongs.right = data[1];
+            setTimeout(() => {
+                prepareSide("left", currentSongs.left);
+                prepareSide("right", currentSongs.right);
+                revealLeft();
+            }, 100);
+        } catch (error) {
+            console.error("Não foi possível buscar as músicas:", error);
+            alert(TEXTS.error_loading_songs);
+        }
+    }
+
+    function prepareSide(side, song) {
+        const coverEl = document.getElementById(`cover-${side}`);
+        coverEl.src = song.cover;
+        coverEl.alt = `Capa do álbum ${song.title} de ${song.artist}`;
+        document.getElementById(`title-${side}`).innerText = song.title;
+        document.getElementById(`artist-${side}`).innerText = song.artist;
+    }
+
+    function revealLeft() {
+        songLeft.classList.add("visible");
+        playAudio(currentSongs.left, 5);
+        setTimeout(revealRight, 5500);
+    }
+
+    function revealRight() {
+        if (roundOver) return;
+        songRight.classList.add("visible");
+        playAudio(currentSongs.right, 5);
+        setTimeout(() => {
+            if (!roundOver) {
+                isChoiceEnabled = true;
+            }
+        }, 5000);
+    }
+
+    function animateApprovalRating(element, finalValue) {
+        element.style.opacity = 1;
+        let startValue = 0;
+        const duration = 1000;
+        const stepTime = 20;
+        const steps = duration / stepTime;
+        let increment = finalValue === 0 ? 0 : finalValue / steps;
+
+        element.innerText = `${TEXTS.approval_of} 0%`;
+        if (finalValue === 0) return;
+
+        const timer = setInterval(() => {
+            startValue += increment;
+            if (startValue >= finalValue) {
+                startValue = finalValue;
+                clearInterval(timer);
+            }
+            element.innerText = `${TEXTS.approval_of} ${Math.floor(startValue)}%`;
+        }, stepTime);
+    }
+    async function handleChoice(side) {
+        if (!roundOver && isChoiceEnabled) {
+            roundOver = true;
+            isChoiceEnabled = false;
+            const winnerSong = currentSongs[side];
+            const loserSide = "left" === side ? "right" : "left";
+            const loserSong = currentSongs[loserSide];
+            document.getElementById(`side-${side}`).classList.add("winner");
+            document.getElementById(`side-${loserSide}`).classList.add("loser");
+            playAudio(winnerSong, 10);
+            try {
+                const response = await fetch('/vote', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        winner_id: winnerSong.id,
+                        winner_title: winnerSong.title,
+                        winner_artist: winnerSong.artist,
+                        loser_id: loserSong.id,
+                        loser_title: loserSong.title,
+                        loser_artist: loserSong.artist
+                    })
+                });
+                if (!response.ok) throw new Error('Falha na resposta do servidor');
+                const approvalData = await response.json();
+
+                animateApprovalRating(approvalLeft, approvalData[String(currentSongs.left.id)].approval);
+                animateApprovalRating(approvalRight, approvalData[String(currentSongs.right.id)].approval);
+
+            } catch (error) {
+                console.error("Erro ao registrar voto:", error);
+                approvalLeft.innerText = TEXTS.approval_error;
+                approvalRight.innerText = TEXTS.approval_error;
+                approvalLeft.style.opacity = 1;
+                approvalRight.style.opacity = 1;
+            }
+            setTimeout(() => {
+                nextRoundButton.style.display = "block";
+            }, 1500);
+        }
+    }
+    sideLeft.addEventListener("click", () => handleChoice("left"));
+    sideRight.addEventListener("click", () => handleChoice("right"));
+    nextRoundButton.addEventListener("click", startRound);
+    startButton.addEventListener("click", () => {
+        startButton.style.display = "none";
+        startRound()
+    });
+    </script>
+</body>
+</html>
